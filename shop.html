@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Shop — VELOUR</title>
+<meta name="description" content="Shop the VELOUR collection — modern wardrobe essentials in responsible materials." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body data-page="shop">
+<div id="site-header"></div>
+
+<main>
+  <div class="wrap page-hero">
+    <div class="crumbs"><a href="index.html">Home</a> / <span>Shop</span></div>
+    <h1 id="shopTitle">The Collection</h1>
+    <p>Considered essentials for a modern wardrobe — cut from responsible materials and made to last.</p>
+  </div>
+
+  <section class="sec">
+    <div class="wrap shop-layout">
+      <aside class="filters" id="shopFilters"></aside>
+      <div>
+        <div class="shop-top">
+          <span class="result-count" id="resultCount"></span>
+          <select id="shopSort" aria-label="Sort products">
+            <option value="featured">Sort: Featured</option>
+            <option value="new">Newest</option>
+            <option value="low">Price: Low to High</option>
+            <option value="high">Price: High to Low</option>
+            <option value="name">Name: A–Z</option>
+          </select>
+        </div>
+        <div class="grid cols-3" id="shopGrid"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="news sec">
+    <div class="wrap">
+      <div class="eyebrow" style="color:var(--gold);margin-bottom:16px">The List</div>
+      <h2>First access, always.</h2>
+      <p>Join for early access to new arrivals, private sales and stories from the atelier.</p>
+      <form onsubmit="event.preventDefault();this.reset();alert('Welcome to The List.');"><input type="email" placeholder="Your email address" required aria-label="Email address" /><button type="submit">Subscribe</button></form>
+    </div>
+  </section>
+</main>
+
+<div id="site-footer"></div>
+
+<script src="assets/js/data.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
