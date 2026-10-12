@@ -2,12 +2,25 @@
    quick view, colourway gallery, reviews, filters, rendering */
 (function () {
   const V = window.VELOUR || { products: [], categories: [] };
-  const money = n => (V.currency || "Rs") + " " + Number(n).toLocaleString();
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const byId = id => V.products.find(p => p.id === +id);
   const imgLarge = url => url.replace(/w=\d+/, "w=900").replace(/h=\d+/, "h=900").replace(/width=\d+/, "width=900");
-  const FREE_SHIP = 5000, SHIP_FEE = 250;
+  const FX = { PKR: ["Rs", 1], USD: ["$", 0.0036], GBP: ["£", 0.0028], AED: ["AED", 0.0132], EUR: ["€", 0.0033] };
+  let cur = (() => { try { return localStorage.getItem("velour_currency") || "PKR"; } catch (e) { return "PKR"; } })();
+  const money = n => {
+    const [sym, rate] = FX[cur] || FX.PKR;
+    const v = Number(n) * rate;
+    const s = rate === 1 ? Math.round(v).toLocaleString() : v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return sym + " " + s;
+  };
+  const FREE_SHIP = 5000, SHIP_FEE = 250, EXPRESS_FEE = 600, GIFT_WRAP = 300;
+  const COUPONS = {
+    WELCOME10: { t: "pct", v: 10, label: "10% off your order" },
+    EID15: { t: "pct", v: 15, label: "15% off — Eid edit" },
+    FREESHIP: { t: "ship", label: "Free standard shipping" },
+    FIRST500: { t: "flat", v: 500, min: 3000, label: "Rs 500 off orders over Rs 3,000" }
+  };
 
   /* ---------------------------------------------------------- storage */
   const S = {
@@ -23,6 +36,28 @@
   const saveUser = () => user ? S.set("velour_user", user) : localStorage.removeItem("velour_user");
   const saveOrders = () => S.set("velour_orders", orders);
   const saveReviews = () => S.set("velour_reviews", reviewsMap);
+
+  /* ---------------------------------------------------------------- commerce state */
+  let coupon = S.get("velour_coupon", null);
+  if (coupon && !COUPONS[coupon]) coupon = null;
+  let addresses = S.get("velour_addr", []);
+  let _ship = "standard", _wrap = false, _note = "";
+  let qaMap = S.get("velour_qa", {});
+  const saveQA = () => S.set("velour_qa", qaMap);
+  const saveAddr = () => S.set("velour_addr", addresses);
+  const discountOf = sub => { const c = coupon && COUPONS[coupon]; if (!c) return 0; if (c.t === "pct") return Math.round(sub * c.v / 100); if (c.t === "flat") return sub >= (c.min || 0) ? c.v : 0; return 0; };
+  function shippingFor(sub, method) { if (sub === 0) return 0; if (method === "express") return EXPRESS_FEE; if (coupon === "FREESHIP") return 0; return sub >= FREE_SHIP ? 0 : SHIP_FEE; }
+  function totals(method, wrap) {
+    const sub = subtotal(); const disc = discountOf(sub);
+    const m = method || _ship; const w = (wrap == null ? _wrap : wrap);
+    const sf = shippingFor(sub, m); const gw = w ? GIFT_WRAP : 0;
+    return { sub, disc, sf, gw, total: Math.max(0, sub - disc + sf + gw) };
+  }
+  function setCurrency(code) {
+    if (!FX[code]) return; cur = code;
+    try { localStorage.setItem("velour_currency", code); } catch (e) {}
+    location.reload();
+  }
 
   /* ---------------------------------------------------------------- header */
   const NAV = [
@@ -100,8 +135,17 @@
               <li><a href="contact.html">Contact</a></li>
             </ul></div>
           </div>
+          <div class="trust-bar">
+            <span><svg viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 4.4-3 8.2-7 9-4-.8-7-4.6-7-9V7z"/><path d="M9 12l2 2 4-4"/></svg> Secure checkout</span>
+            <span><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg> Free 30-day returns</span>
+            <span><svg viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 4.4-3 8.2-7 9-4-.8-7-4.6-7-9V7z"/></svg> 100% authentic</span>
+            <span><svg viewBox="0 0 24 24"><path d="M3 7h13v8H3z"/><path d="M16 10h3l2 3v2h-5"/><circle cx="7.5" cy="17.5" r="1.6"/></svg> Carbon-neutral delivery</span>
+          </div>
           <div class="foot-bottom">
             <span>© 2026 VELOUR. All rights reserved.</span>
+            <span class="pay-chips"><i>VISA</i><i>MASTERCARD</i><i>JAZZCASH</i><i>EASYPAISA</i><i>COD</i></span>
+            <span class="foot-cur"><label for="curSel">Currency</label>
+              <select id="curSel">${Object.keys(FX).map(k => `<option value="${k}" ${k === cur ? "selected" : ""}>${k}</option>`).join("")}</select></span>
             <span><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="cookies.html">Cookies</a></span>
           </div>
         </div>
@@ -109,22 +153,27 @@
   }
 
   /* ---------------------------------------------------------------- cards */
+  function avgRating(p) { const list = allReviews(p); return list.length ? (list.reduce((s, r) => s + r.rating, 0) / list.length) : 0; }
   function cardHTML(p) {
     const tag = p.tag
       ? `<span class="tag ${p.tag}">${p.tag === "new" ? "New" : p.tag === "sale" ? "Sale" : p.tag}</span>` : "";
     const price = p.tag === "sale"
       ? `<span class="price"><s>${money(p.price)}</s>${money(Math.round(p.price * 0.7))}</span>`
       : `<span class="price">${money(p.price)}</span>`;
+    const cmp = S.get("velour_compare", []);
+    const r = avgRating(p), n = allReviews(p).length;
     return `<article class="card reveal" data-id="${p.id}">
       <div class="card-media">
         <a class="card-link" href="product.html?id=${p.id}" aria-label="${p.name}"></a>
         <img src="${p.img}" alt="${p.name}" loading="lazy">
         ${tag}
         <button class="wish${isWished(p.id) ? " on" : ""}" data-wish="${p.id}" aria-label="Add to wishlist"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-9.3-8.4C1 8.3 3 5 6.3 5c2 0 3.3 1.1 4.2 2.3.2.3.9.3 1.1 0C12.5 6.1 13.8 5 15.8 5 19 5 21 8.3 19.3 11.6 17 15.4 12 20 12 20z"/></svg></button>
+        <button class="cmp${cmp.includes(p.id) ? " on" : ""}" data-compare="${p.id}" aria-label="Add to compare" title="Compare"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 7l3-3M4 7l3 3M20 17H4M20 17l-3-3M20 17l-3 3"/></svg></button>
         <button class="quick" data-quick="${p.id}">Quick view</button>
       </div>
       <div class="card-info">
-        <div><h3><a href="product.html?id=${p.id}">${p.name}</a></h3><div class="cat-name">${p.brand} · ${p.cat}</div></div>
+        <div><h3><a href="product.html?id=${p.id}">${p.name}</a></h3><div class="cat-name">${p.brand} · ${p.cat}</div>
+        <div class="stars sm">${starHTML(Math.round(r))}<span class="rs-meta">${r.toFixed(1)} (${n})</span></div></div>
         <div>${price}</div>
       </div>
     </article>`;
@@ -182,7 +231,7 @@
               <button class="rm" data-rm="${p.id}">Remove</button></div>
           </div>`;
         }).join("");
-        if (foot) { foot.style.display = "block"; $("#subtotal").textContent = money(subtotal()); $("#total").textContent = money(subtotal() + shipFee()); }
+        if (foot) { const t = totals(); foot.style.display = "block"; $("#subtotal").textContent = money(t.sub); $("#total").textContent = money(t.total); }
       }
       const bl = $("#bagLine"); if (bl) bl.textContent = cartCount() + (cartCount() === 1 ? " item" : " items");
     }
@@ -287,43 +336,75 @@
     const list = allReviews(p);
     const avg = list.length ? (list.reduce((s, r) => s + r.rating, 0) / list.length) : 0;
     const dist = [5, 4, 3, 2, 1].map(s => list.filter(r => r.rating === s).length);
+    const helpful = S.get("velour_helpful", {});
+    const keyOf = r => (r.name + "|" + r.date + "|" + (r.text || "").slice(0, 24)).replace(/\s+/g, " ");
+    const withPhotos = list.filter(r => r.photo).length;
     return `<div class="reviews">
       <div class="rating-summary">
         <div class="rating-big">${avg.toFixed(1)}</div>
         <div><div class="stars">${starHTML(Math.round(avg))}</div>
-          <div class="rs-meta">Based on ${list.length} review${list.length === 1 ? "" : "s"}</div></div>
-        <div class="rs-meta" style="margin-left:auto">${dist.map((c, i) => `${5 - i}★ &nbsp;${c}`).join(" &nbsp;·&nbsp; ")}</div>
+          <div class="rs-meta">Based on ${list.length} review${list.length === 1 ? "" : "s"}${withPhotos ? " · " + withPhotos + " with photos" : ""}</div></div>
+        <div class="rs-dist" style="margin-left:auto">${dist.map((c, i) => `<div class="dist-row"><span>${5 - i}★</span><i style="width:${list.length ? (c / list.length * 100) : 0}%"></i><b>${c}</b></div>`).join("")}</div>
       </div>
       ${list.map(r => `<div class="review">
         <div class="review-head"><b>${r.name}${r.verified ? '<span class="verified">Verified buyer</span>' : ""}</b><span>${r.date}</span></div>
         <div class="stars" style="margin-bottom:8px">${starHTML(r.rating)}</div>
-        <p>${r.text}</p></div>`).join("")}
+        <p>${r.text}</p>
+        ${r.photo ? `<img class="review-photo" src="${r.photo}" alt="Customer photo">` : ""}
+        <button class="helpful" data-help="${keyOf(r)}">♡ Helpful${(helpful[keyOf(r)] || r.helpful) ? " (" + (helpful[keyOf(r)] || r.helpful) + ")" : ""}</button></div>`).join("")}
       <div class="review-form" id="reviewForm">
         <h3 class="serif">Write a review</h3>
         <div class="eyebrow" style="margin-bottom:8px">Your rating</div>
         <div class="star-input" id="starInput">${[1, 2, 3, 4, 5].map(i => `<span data-star="${i}">★</span>`).join("")}</div>
         <div class="field"><label for="rvName">Name</label><input id="rvName" value="${user ? user.name : ""}" placeholder="Your name"></div>
         <div class="field"><label for="rvText">Review</label><textarea id="rvText" style="min-height:100px" placeholder="Share your thoughts on this piece…"></textarea></div>
+        <div class="field"><label for="rvPhoto">Add a photo (optional)</label><input id="rvPhoto" type="file" accept="image/*"></div>
         <button class="btn" id="rvSubmit">Submit review</button>
       </div></div>`;
   }
   function wireReviews(p) {
-    let rating = 5;
+    let rating = 5, photo = null;
     const si = $("#starInput");
     if (si) {
       const paint = () => $$("#starInput span").forEach(s => s.classList.toggle("on", +s.dataset.star <= rating));
       paint();
       $$("#starInput span").forEach(s => s.onclick = () => { rating = +s.dataset.star; paint(); });
     }
+    const pf = $("#rvPhoto");
+    if (pf) pf.onchange = () => { const f = pf.files[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { photo = rd.result; showToast("Photo attached"); }; rd.readAsDataURL(f); };
     const btn = $("#rvSubmit");
     if (btn) btn.onclick = () => {
       const name = ($("#rvName").value || "").trim() || "Anonymous";
       const text = ($("#rvText").value || "").trim();
       if (!text) { showToast("Please write a short review"); return; }
-      (reviewsMap[p.id] = reviewsMap[p.id] || []).unshift({ name, rating, date: "Just now", text, verified: !!user });
+      (reviewsMap[p.id] = reviewsMap[p.id] || []).unshift({ name, rating, date: "Just now", text, photo, verified: !!user });
       saveReviews();
       $("#reviewsRoot").innerHTML = reviewsHTML(p); wireReviews(p);
       showToast("Thanks — your review is live");
+    };
+    $$("#reviewsRoot [data-help]").forEach(b => b.onclick = () => {
+      const h = S.get("velour_helpful", {}); const k = b.dataset.help;
+      if (b.classList.contains("on")) { return; }
+      h[k] = (h[k] || 0) + 1; S.set("velour_helpful", h); b.classList.add("on");
+      b.textContent = "♥ Helpful (" + h[k] + ")";
+    });
+  }
+  function qaHTML(p) {
+    const list = qaMap[p.id] || [];
+    return `<div class="qa-list">${list.length ? list.map(q => `<div class="qa-item"><p class="qa-q"><b>Q</b> ${q.q}</p><p class="qa-a"><b>A</b> ${q.a || "Our team will reply by email shortly."}</p></div>`).join("") : `<p style="color:var(--muted)">No questions yet — ask the first one.</p>`}</div>
+      <div class="qa-form">
+        <div class="field"><label for="qaName">Your name</label><input id="qaName" value="${user ? user.name : ""}" placeholder="Name"></div>
+        <div class="field"><label for="qaQ">Question</label><textarea id="qaQ" style="min-height:80px" placeholder="Ask about fit, fabric, delivery…"></textarea></div>
+        <button class="btn" id="qaSubmit">Submit question</button>
+      </div>`;
+  }
+  function wireQA(p) {
+    const b = $("#qaSubmit"); if (!b) return;
+    b.onclick = () => {
+      const q = ($("#qaQ").value || "").trim(); const nm = ($("#qaName").value || "").trim() || "Guest";
+      if (!q) { showToast("Please type a question"); return; }
+      (qaMap[p.id] = qaMap[p.id] || []).unshift({ name: nm, q, a: "Thanks — a stylist will answer within 24 hours." });
+      saveQA(); $("#qaRoot").innerHTML = qaHTML(p); wireQA(p); showToast("Question submitted");
     };
   }
 
@@ -359,6 +440,12 @@
             <button class="btn" id="pdpAdd" style="flex:1;justify-content:center">Add to bag — ${money(p.price)}</button>
           </div>
           <p class="link-arrow" id="pdpWish" style="cursor:pointer;border:none;margin-top:4px">${isWished(p.id) ? "♥ Saved to wishlist" : "♡ Save to wishlist"}</p>
+          <div class="pdp-actions">
+            <button class="pill-btn" id="pdpCompare">Compare</button>
+            <button class="pill-btn" data-spin="${p.id}">360° view</button>
+            <button class="pill-btn" id="pdpSize">Find my size</button>
+            <a class="pill-btn" href="size-guide.html">Size guide</a>
+          </div>
           <div class="pdp-meta">
             <p><svg viewBox="0 0 24 24"><path d="M3 7h13v8H3z"/><path d="M16 10h3l2 3v2h-5"/><circle cx="7.5" cy="17.5" r="1.6"/><circle cx="17.5" cy="17.5" r="1.6"/></svg> Free delivery on orders over Rs 5,000</p>
             <p><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg> Free 30-day returns</p>
@@ -372,6 +459,7 @@
           <button data-tab="shipping">Shipping &amp; Returns</button>
           <button data-tab="care">Care</button>
           <button data-tab="reviews">Reviews</button>
+          <button data-tab="qa">Q&amp;A</button>
         </div>
         <div class="tab-body" data-panel="details">
           <p><strong>Material:</strong> ${p.material}. Finished by hand by our partner ateliers. Designed to be worn for years, not seasons.</p>
@@ -385,6 +473,9 @@
         </div>
         <div class="tab-body" data-panel="reviews" id="reviews" hidden>
           <div id="reviewsRoot">${reviewsHTML(p)}</div>
+        </div>
+        <div class="tab-body" data-panel="qa" hidden>
+          <div class="qa" id="qaRoot">${qaHTML(p)}</div>
         </div>
       </div>
       <section class="sec">
@@ -411,7 +502,10 @@
       $$(".tab-head button").forEach(x => x.classList.remove("on")); b.classList.add("on");
       $$(".tab-body").forEach(pan => pan.hidden = pan.dataset.panel !== b.dataset.tab);
     });
+    const cmpBtn = $("#pdpCompare"); if (cmpBtn) cmpBtn.onclick = () => { if (V.features) V.features.compare(p.id); };
+    const szBtn = $("#pdpSize"); if (szBtn) szBtn.onclick = () => { if (V.features) V.features.sizeRec(); };
     wireReviews(p);
+    wireQA(p);
   }
 
   /* ---------------------------------------------------------------- shop page */
@@ -514,7 +608,8 @@
       root.innerHTML = `<div class="empty-page"><svg viewBox="0 0 24 24"><path d="M6 7h12l-1 13H7L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/></svg><h3 class="serif" style="font-size:26px;margin-bottom:10px">Your bag is empty</h3><p>Add a few pieces to begin.</p><a href="shop.html" class="btn" style="margin-top:22px">Continue shopping</a></div>`;
       return;
     }
-    const ship = shipFee();
+    const t = totals();
+    const c = coupon && COUPONS[coupon];
     root.innerHTML = `
       <div class="cart-layout">
         <div>${cart.map(i => { const p = byId(i.id); return `
@@ -528,16 +623,33 @@
             <div style="text-align:right"><div class="price">${money(p.price * i.qty)}</div>
               <button class="rm" data-rm="${p.id}" style="margin-top:10px">Remove</button></div>
           </div>`; }).join("")}
+          <div class="promo" id="cartPromo">
+            <div class="eyebrow" style="margin-bottom:8px">Have a code?</div>
+            ${c ? `<div class="promo-on"><b>${coupon}</b> applied · ${c.label}<button class="link-arrow" id="promoRemove">Remove</button></div>`
+                : `<div class="promo-row"><input id="promoInput" placeholder="e.g. WELCOME10" aria-label="Promo code"><button class="btn sm" id="promoApply">Apply</button></div>`}
+          </div>
         </div>
         <aside class="summary">
           <h3 class="serif">Order summary</h3>
-          <div class="row"><span>Subtotal</span><span>${money(subtotal())}</span></div>
-          <div class="row"><span>Shipping</span><span>${ship === 0 ? "Free" : money(ship)}</span></div>
-          <div class="row total"><span>Total</span><span>${money(subtotal() + ship)}</span></div>
+          <div class="row"><span>Subtotal</span><span>${money(t.sub)}</span></div>
+          ${t.disc ? `<div class="row disc"><span>Discount (${coupon})</span><span>− ${money(t.disc)}</span></div>` : ""}
+          <div class="row"><span>Shipping</span><span>${t.sf === 0 ? "Free" : money(t.sf)}</span></div>
+          <div class="row total"><span>Total</span><span>${money(t.total)}</span></div>
           <button class="btn block" data-checkout>Proceed to checkout <span>→</span></button>
+          <p style="font-size:12px;color:var(--muted);margin-top:12px">Try <b>WELCOME10</b> for 10% off, or <b>FREESHIP</b> for free delivery.</p>
           <a href="shop.html" class="link-arrow" style="display:inline-block;margin-top:18px">Continue shopping <span>→</span></a>
         </aside>
       </div>`;
+    const pa = $("#promoApply"); if (pa) pa.onclick = () => applyCoupon($("#promoInput").value);
+    const pi = $("#promoInput"); if (pi) pi.addEventListener("keydown", e => { if (e.key === "Enter") applyCoupon(pi.value); });
+    const pr = $("#promoRemove"); if (pr) pr.onclick = () => { coupon = ""; S.set("velour_coupon", ""); renderCartPage(); renderCart(); };
+  }
+  function applyCoupon(code) {
+    code = (code || "").trim().toUpperCase();
+    if (!code) return;
+    if (!COUPONS[code]) { showToast("That code isn't valid"); return; }
+    if (code === "FIRST500" && subtotal() < 3000) { showToast("FIRST500 needs a Rs 3,000 minimum"); return; }
+    coupon = code; S.set("velour_coupon", coupon); showToast("Code applied — " + COUPONS[code].label); renderCartPage(); renderCart();
   }
 
   /* ---------------------------------------------------------------- checkout */
@@ -548,13 +660,26 @@
     ["easypaisa", "Easypaisa", "Mobile wallet", '<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/>'],
     ["googlepay", "Google Pay", "Fast &amp; secure", '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>']
   ];
+  const coState = { name: "", phone: "", email: "", addr: "", city: "Karachi", post: "", country: "Pakistan", pay: "cod" };
+  function captureCO() {
+    if (!$("#coForm")) return;
+    const g = id => { const el = $("#" + id); return el ? el.value : ""; };
+    coState.name = g("coName") || coState.name; coState.phone = g("coPhone") || coState.phone;
+    coState.email = g("coEmail") || coState.email; coState.addr = g("coAddr") || coState.addr;
+    coState.city = g("coCity") || coState.city; coState.post = g("coPost") || coState.post;
+    coState.country = g("coCountry") || coState.country;
+    const pr = $('input[name="pay"]:checked'); if (pr) coState.pay = pr.value;
+  }
   function renderCheckout() {
     const root = $("#checkoutRoot"); if (!root) return;
+    captureCO();
     if (!cart.length) {
       root.innerHTML = `<div class="empty-page"><svg viewBox="0 0 24 24"><path d="M6 7h12l-1 13H7L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/></svg><h3 class="serif" style="font-size:26px;margin-bottom:10px">Your bag is empty</h3><p>Add a few pieces before checking out.</p><a href="shop.html" class="btn" style="margin-top:22px">Continue shopping</a></div>`;
       return;
     }
-    const ship = shipFee();
+    if (!coState.name && user) { coState.name = user.name || ""; coState.email = user.email || ""; }
+    const t = totals();
+    const c = coupon && COUPONS[coupon];
     root.innerHTML = `
       <div class="checkout-layout">
         <div>
@@ -562,70 +687,154 @@
             <div class="co-step">
               <h2><span class="step-num">1</span> Contact</h2>
               <div class="form-grid">
-                <div class="field"><label for="coName">Full name</label><input id="coName" required value="${user ? user.name : ""}"></div>
-                <div class="field"><label for="coPhone">Phone</label><input id="coPhone" required placeholder="03xx xxxxxxx"></div>
+                <div class="field"><label for="coName">Full name</label><input id="coName" required value="${coState.name}"></div>
+                <div class="field"><label for="coPhone">Phone</label><input id="coPhone" required placeholder="03xx xxxxxxx" value="${coState.phone}"></div>
               </div>
-              <div class="field"><label for="coEmail">Email</label><input id="coEmail" type="email" required value="${user ? user.email : ""}"></div>
+              <div class="field"><label for="coEmail">Email</label><input id="coEmail" type="email" required value="${coState.email}"></div>
+              <div class="co-guest">Checking out as a guest — no account needed. <a href="login.html">Sign in</a> to save your details.</div>
             </div>
             <div class="co-step">
               <h2><span class="step-num">2</span> Shipping address</h2>
-              <div class="field"><label for="coAddr">Address</label><input id="coAddr" required placeholder="House / street / area"></div>
+              ${addresses.length ? `<div class="field"><label for="coAddrPick">Saved addresses</label>
+                <select id="coAddrPick"><option value="">— Enter a new address —</option>
+                ${addresses.map((a, i) => `<option value="${i}">${a.label || "Address"} · ${a.addr}, ${a.city}</option>`).join("")}</select></div>` : ""}
+              <div class="field"><label for="coAddr">Address</label><input id="coAddr" required placeholder="House / street / area" value="${coState.addr}"></div>
               <div class="form-grid">
-                <div class="field"><label for="coCity">City</label><input id="coCity" required value="Karachi"></div>
-                <div class="field"><label for="coPost">Postal code</label><input id="coPost" placeholder="75xxx"></div>
+                <div class="field"><label for="coCity">City</label><input id="coCity" required value="${coState.city}"></div>
+                <div class="field"><label for="coPost">Postal code</label><input id="coPost" placeholder="75xxx" value="${coState.post}"></div>
               </div>
-              <div class="field"><label for="coCountry">Country</label><input id="coCountry" value="Pakistan" required></div>
+              <div class="field"><label for="coCountry">Country</label><input id="coCountry" value="${coState.country}" required></div>
+              ${user ? `<label class="co-check"><input type="checkbox" id="coSaveAddr"> Save this address to my account</label>` : ""}
             </div>
             <div class="co-step">
-              <h2><span class="step-num">3</span> Payment method</h2>
+              <h2><span class="step-num">3</span> Delivery</h2>
+              <div class="ship-opts">
+                <label class="ship-opt${_ship === "standard" ? " on" : ""}" data-ship="standard">
+                  <span class="po-t">Standard<small>3–5 working days</small></span>
+                  <span class="pr">${shippingFor(t.sub, "standard") === 0 ? "Free" : money(SHIP_FEE)}</span>
+                  <input type="radio" name="ship" value="standard" ${_ship === "standard" ? "checked" : ""}></label>
+                <label class="ship-opt${_ship === "express" ? " on" : ""}" data-ship="express">
+                  <span class="po-t">Express<small>1–2 working days</small></span>
+                  <span class="pr">${money(EXPRESS_FEE)}</span>
+                  <input type="radio" name="ship" value="express" ${_ship === "express" ? "checked" : ""}></label>
+              </div>
+              <label class="co-check"><input type="checkbox" id="coWrap" ${_wrap ? "checked" : ""}> Add signature gift wrap &amp; note (+ ${money(GIFT_WRAP)})</label>
+              <div class="field"><label for="coNote">Order note (optional)</label><input id="coNote" placeholder="Delivery instructions, gift message…" value="${_note}"></div>
+            </div>
+            <div class="co-step">
+              <h2><span class="step-num">4</span> Payment method</h2>
               <div class="pay-methods">
-                ${PAY.map((m, i) => `<label class="pay-opt${i === 0 ? " on" : ""}" data-pay="${m[0]}">
+                ${PAY.map(m => `<label class="pay-opt${coState.pay === m[0] ? " on" : ""}" data-pay="${m[0]}">
                   <svg viewBox="0 0 24 24">${m[3]}</svg>
                   <span class="po-t">${m[1]}<small>${m[2]}</small></span>
-                  <input type="radio" name="pay" value="${m[0]}" ${i === 0 ? "checked" : ""}></label>`).join("")}
+                  <input type="radio" name="pay" value="${m[0]}" ${coState.pay === m[0] ? "checked" : ""}></label>`).join("")}
               </div>
-              <div class="field" id="cardFields" hidden style="margin-top:18px">
+              <div class="field" id="cardFields" ${coState.pay === "card" ? "" : "hidden"} style="margin-top:18px">
                 <label for="coCard">Card number</label><input id="coCard" placeholder="4242 4242 4242 4242" inputmode="numeric">
                 <div class="form-grid" style="margin-top:14px">
                   <input placeholder="MM / YY" inputmode="numeric">
                   <input placeholder="CVC" inputmode="numeric">
                 </div>
               </div>
-              <p class="note" style="margin-top:18px;font-size:13px;color:var(--muted)">This is a demonstration store — no real payment is taken and no card details are stored.</p>
+              <div class="trust-row">
+                <span><svg viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 4.4-3 8.2-7 9-4-.8-7-4.6-7-9V7z"/><path d="M9 12l2 2 4-4"/></svg> Secure checkout</span>
+                <span><svg viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 4.4-3 8.2-7 9-4-.8-7-4.6-7-9V7z"/></svg> 30-day returns</span>
+              </div>
+              <p class="note" style="margin-top:14px;font-size:13px;color:var(--muted)">This is a demonstration store — no real payment is taken and no card details are stored.</p>
             </div>
-            <button class="btn block" type="submit" id="coPlace">Place order — ${money(subtotal() + ship)}</button>
+            <button class="btn block" type="submit" id="coPlace">Place order — ${money(t.total)}</button>
           </form>
         </div>
         <aside class="summary">
           <h3 class="serif">Order summary</h3>
           ${cart.map(i => { const p = byId(i.id); return `<div class="mini-item"><img src="${p.img}" alt="${p.name}"><div class="mi-name">${p.name}<div class="cat-name">${p.brand}</div></div><span>×${i.qty}</span></div>`; }).join("")}
-          <div class="row" style="margin-top:16px"><span>Subtotal</span><span>${money(subtotal())}</span></div>
-          <div class="row"><span>Shipping</span><span>${ship === 0 ? "Free" : money(ship)}</span></div>
-          <div class="row total"><span>Total</span><span>${money(subtotal() + ship)}</span></div>
-          <p style="font-size:12px;color:var(--muted);margin-top:14px">Free delivery on orders over Rs 5,000.</p>
+          <div class="promo" id="coPromo" style="margin-top:14px">
+            ${c ? `<div class="promo-on"><b>${coupon}</b> · ${c.label}<button class="link-arrow" id="promoRemove">Remove</button></div>`
+                : `<div class="promo-row"><input id="promoInput" placeholder="Promo code"><button class="btn sm" id="promoApply">Apply</button></div>`}
+          </div>
+          <div class="row" style="margin-top:14px"><span>Subtotal</span><span>${money(t.sub)}</span></div>
+          ${t.disc ? `<div class="row disc"><span>Discount</span><span>− ${money(t.disc)}</span></div>` : ""}
+          <div class="row"><span>Shipping (${_ship})</span><span>${t.sf === 0 ? "Free" : money(t.sf)}</span></div>
+          ${t.gw ? `<div class="row"><span>Gift wrap</span><span>${money(t.gw)}</span></div>` : ""}
+          <div class="row total"><span>Total</span><span>${money(t.total)}</span></div>
+          <p style="font-size:12px;color:var(--muted);margin-top:14px">Free standard delivery on orders over Rs 5,000.</p>
         </aside>
       </div>`;
+    const bind = (id, key) => { const el = $("#" + id); if (el) el.oninput = () => { coState[key] = el.value; }; };
+    bind("coName", "name"); bind("coPhone", "phone"); bind("coEmail", "email"); bind("coAddr", "addr"); bind("coCity", "city"); bind("coPost", "post"); bind("coCountry", "country");
+    const noteEl = $("#coNote"); if (noteEl) noteEl.oninput = () => { _note = noteEl.value; };
+    const pick = $("#coAddrPick"); if (pick) pick.onchange = () => { const a = addresses[+pick.value]; if (a) { coState.addr = a.addr; coState.city = a.city; coState.post = a.post || ""; coState.country = a.country || "Pakistan"; renderCheckout(); } };
     $$("#checkoutRoot .pay-opt").forEach(opt => opt.onclick = () => {
       $$("#checkoutRoot .pay-opt").forEach(o => o.classList.remove("on")); opt.classList.add("on");
+      coState.pay = opt.dataset.pay;
       $("#cardFields").hidden = opt.dataset.pay !== "card";
     });
+    $$("#checkoutRoot .ship-opt").forEach(opt => opt.onclick = () => { _ship = opt.dataset.ship; renderCheckout(); });
+    const wrapEl = $("#coWrap"); if (wrapEl) wrapEl.onchange = () => { _wrap = wrapEl.checked; renderCheckout(); };
+    const pa = $("#promoApply"); if (pa) pa.onclick = () => { const v = $("#promoInput").value; captureCO(); applyCoupon(v); };
+    const pr = $("#promoRemove"); if (pr) pr.onclick = () => { coupon = null; S.set("velour_coupon", null); captureCO(); showToast("Code removed"); renderCheckout(); renderCart(); };
     $("#coForm").addEventListener("submit", e => {
       e.preventDefault();
-      const pay = ($('input[name="pay"]:checked') || {}).value || "cod";
+      captureCO();
+      const t2 = totals();
       const ref = "VL-" + Date.now().toString(36).toUpperCase().slice(-6) + Math.floor(Math.random() * 90 + 10);
+      if (user && $("#coSaveAddr") && $("#coSaveAddr").checked) {
+        addresses.push({ label: "Home", name: coState.name, phone: coState.phone, addr: coState.addr, city: coState.city, post: coState.post, country: coState.country });
+        saveAddr();
+      }
       const order = {
-        ref, date: new Date().toISOString(), method: pay,
-        customer: { name: $("#coName").value, email: $("#coEmail").value, phone: $("#coPhone").value, address: $("#coAddress") ? $("#coAddress").value : $("#coAddr").value },
+        ref, date: new Date().toISOString(), method: coState.pay, ship: _ship, wrap: _wrap, note: _note, coupon: coupon || null,
+        customer: { name: coState.name, email: coState.email, phone: coState.phone, address: coState.addr, city: coState.city, post: coState.post, country: coState.country },
         items: cart.map(i => { const p = byId(i.id); return { id: p.id, name: p.name, brand: p.brand, price: p.price, qty: i.qty, img: p.img }; }),
-        subtotal: subtotal(), shipping: ship, total: subtotal() + ship, status: "Processing"
+        subtotal: t2.sub, discount: t2.disc, shipping: t2.sf, wrapFee: t2.gw, total: t2.total,
+        status: "Processing", history: [{ at: new Date().toISOString(), status: "Order placed" }]
       };
       orders.unshift(order); saveOrders();
-      cart = []; save(); renderCart();
+      cart = []; save(); coupon = null; S.set("velour_coupon", null); _wrap = false; _note = ""; renderCart();
       location.href = "order.html?ref=" + ref;
     });
   }
 
   /* ---------------------------------------------------------------- order confirmation */
+  const STEPS = ["Order placed", "Processing", "Packed", "Shipped", "Delivered"];
+  function stepIndex(status) {
+    if (status === "Cancelled" || status === "Return requested") return -1;
+    const i = STEPS.indexOf(status);
+    if (i >= 0) return i;
+    return status === "Processing" ? 1 : 1;
+  }
+  function timelineHTML(order) {
+    const idx = stepIndex(order.status);
+    if (idx < 0) return `<div class="timeline halted"><p><b>${order.status}.</b> Our team will follow up by email with the next steps.</p></div>`;
+    return `<div class="timeline">${STEPS.map((s, i) => `
+      <div class="tl-step${i <= idx ? " done" : ""}${i === idx ? " now" : ""}">
+        <span class="tl-dot">${i < idx || i === idx ? '<svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>' : ""}</span>
+        <span class="tl-lbl">${s}</span>
+      </div>`).join('<span class="tl-line"></span>')}</div>`;
+  }
+  function printInvoice(order) {
+    const pay = (PAY.find(p => p[0] === order.method) || [null, "Cash on Delivery"])[1];
+    const w = window.open("", "_blank", "width=800,height=900");
+    if (!w) { showToast("Allow pop-ups to print your invoice"); return; }
+    const rows = order.items.map(it => `<tr><td>${it.name}<br><small>${it.brand}</small></td><td>${it.qty}</td><td>${money(it.price)}</td><td>${money(it.price * it.qty)}</td></tr>`).join("");
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${order.ref}</title>
+      <style>body{font-family:Georgia,serif;color:#1a1a1a;padding:40px;max-width:720px;margin:auto}h1{letter-spacing:.3em;font-size:20px}
+      table{width:100%;border-collapse:collapse;margin:24px 0}th,td{border-bottom:1px solid #ddd;padding:10px;text-align:left;font-family:Arial;font-size:13px}
+      .tot{text-align:right;margin-top:12px;font-family:Arial;font-size:14px}.muted{color:#777;font-family:Arial;font-size:12px}</style></head><body>
+      <h1>VELOUR</h1><p class="muted">Curated in Karachi · velocity.velour@example.com</p>
+      <h2>Invoice ${order.ref}</h2>
+      <p class="muted">Date: ${new Date(order.date).toLocaleString()} · Payment: ${pay}</p>
+      <p class="muted"><b>Ship to:</b> ${order.customer.name}, ${order.customer.address}, ${order.customer.city} ${order.customer.post || ""}, ${order.customer.country || ""}<br>${order.customer.phone} · ${order.customer.email}</p>
+      <table><thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="tot">Subtotal: ${money(order.subtotal)}<br>${order.discount ? "Discount: −" + money(order.discount) + "<br>" : ""}Shipping: ${order.shipping === 0 ? "Free" : money(order.shipping)}<br>${order.wrapFee ? "Gift wrap: " + money(order.wrapFee) + "<br>" : ""}<b>Total: ${money(order.total)}</b></div>
+      <p class="muted" style="margin-top:30px">Thank you for shopping with VELOUR. This is a demonstration invoice.</p>
+      <script>window.onload=function(){window.print();}<\/script></body></html>`);
+    w.document.close();
+  }
+  function reorder(order) {
+    order.items.forEach(it => { const i = cart.find(c => c.id === it.id); if (i) i.qty += it.qty; else cart.push({ id: it.id, qty: it.qty }); });
+    save(); renderCart(); showToast("Added " + order.items.length + " item(s) to your bag"); location.href = "cart.html";
+  }
   function renderOrder() {
     const root = $("#orderRoot"); if (!root) return;
     const ref = new URLSearchParams(location.search).get("ref");
@@ -641,20 +850,30 @@
         <h1>Thank you, ${order.customer.name.split(" ")[0]}.</h1>
         <p>Your order is confirmed and being prepared with care.</p>
         <div class="ref-box">Order reference &nbsp;<b>${order.ref}</b></div>
+        <div class="ref-box" style="background:transparent;border:none">
+          <span>Track your order</span>
+          ${timelineHTML(order)}
+        </div>
         <div class="summary" style="text-align:left;position:static">
           ${order.items.map(it => `<div class="oc-item" style="display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)"><img src="${it.img}" alt="${it.name}" style="width:56px;height:70px;object-fit:cover"><div style="flex:1"><h4 style="font-family:var(--sans);font-size:14px">${it.name}</h4><div class="cat-name">${it.brand} · Qty ${it.qty}</div></div><span>${money(it.price * it.qty)}</span></div>`).join("")}
           <div class="row" style="margin-top:16px"><span>Subtotal</span><span>${money(order.subtotal)}</span></div>
-          <div class="row"><span>Shipping</span><span>${order.shipping === 0 ? "Free" : money(order.shipping)}</span></div>
+          ${order.discount ? `<div class="row disc"><span>Discount${order.coupon ? " (" + order.coupon + ")" : ""}</span><span>− ${money(order.discount)}</span></div>` : ""}
+          <div class="row"><span>Shipping${order.ship ? " (" + order.ship + ")" : ""}</span><span>${order.shipping === 0 ? "Free" : money(order.shipping)}</span></div>
+          ${order.wrapFee ? `<div class="row"><span>Gift wrap</span><span>${money(order.wrapFee)}</span></div>` : ""}
           <div class="row total"><span>Total</span><span>${money(order.total)}</span></div>
           <div class="row"><span>Payment</span><span>${payLabel}</span></div>
           <div class="row"><span>Status</span><span class="status-pill">${order.status}</span></div>
         </div>
         <p style="margin-top:22px;font-size:13.5px">A confirmation has been sent to <b>${order.customer.email}</b>.</p>
         <div class="cta-row" style="justify-content:center;margin-top:26px">
+          <button class="btn ghost" data-print>Print invoice</button>
+          <button class="btn ghost" data-reorder>Reorder</button>
           <a href="account.html" class="btn ghost">View my orders</a>
           <a href="shop.html" class="btn">Continue shopping <span>→</span></a>
         </div>
       </div>`;
+    $("[data-print]").onclick = () => printInvoice(order);
+    $("[data-reorder]").onclick = () => reorder(order);
   }
 
   /* ---------------------------------------------------------------- account */
@@ -665,31 +884,68 @@
       return;
     }
     const since = user.since || new Date().toISOString();
+    const spend = orders.reduce((s, o) => s + o.total, 0);
     root.innerHTML = `
       <div class="acct-head"><div><div class="eyebrow">My account</div><h2>Hello, ${user.name}</h2></div><button class="btn ghost sm" id="logoutBtn">Sign out</button></div>
       <div class="acct-stats">
         <div class="acct-stat"><strong>${orders.length}</strong><span>Orders</span></div>
         <div class="acct-stat"><strong>${wish.length}</strong><span>Wishlist items</span></div>
+        <div class="acct-stat"><strong>${money(spend)}</strong><span>Lifetime spend</span></div>
         <div class="acct-stat"><strong>${new Date(since).getFullYear()}</strong><span>Member since</span></div>
       </div>
       <div class="co-step">
         <h2 style="font-size:20px">Order history</h2>
         ${orders.length ? orders.map(o => `
-          <div class="order-card">
+          <div class="order-card" data-order="${o.ref}">
             <div class="oc-head"><span>Order <b>${o.ref}</b></span><span>${new Date(o.date).toLocaleDateString()}</span><span class="status-pill">${o.status}</span><span><b>${money(o.total)}</b></span></div>
-            <div class="oc-body">${o.items.map(it => `<div class="oc-item"><img src="${it.img}" alt="${it.name}"><div><h4>${it.name}</h4><div class="cat-name">${it.brand} · Qty ${it.qty}</div></div></div>`).join("")}
-            <a href="order.html?ref=${o.ref}" class="link-arrow" style="margin-top:12px;display:inline-block">View order <span>→</span></a></div>
+            <div class="oc-body">${o.items.map(it => `<div class="oc-item"><img src="${it.img}" alt="${it.name}"><div><h4>${it.name}</h4><div class="cat-name">${it.brand} · Qty ${it.qty}</div></div></div>`).join("")}</div>
+            <div class="oc-actions">
+              <a href="order.html?ref=${o.ref}" class="link-arrow">View order</a>
+              <button class="link-arrow" data-reorder="${o.ref}">Reorder</button>
+              <button class="link-arrow" data-print="${o.ref}">Print invoice</button>
+              ${o.status === "Cancelled" || o.status === "Return requested" ? "" : (stepIndex(o.status) >= 4 ? `<button class="link-arrow danger" data-return="${o.ref}">Request return</button>` : `<button class="link-arrow danger" data-cancel="${o.ref}">Cancel order</button>`)}
+            </div>
           </div>`).join("") : `<p style="color:var(--muted)">No orders yet. <a href="shop.html" style="color:var(--accent)">Start shopping →</a></p>`}
       </div>
       <div class="co-step">
-        <h2 style="font-size:20px">Profile</h2>
+        <h2 style="font-size:20px">Saved addresses</h2>
+        <div id="addrList">${addresses.length ? addresses.map((a, i) => `<div class="addr-row"><div><b>${a.label || "Address"}</b><small>${a.name ? a.name + " · " : ""}${a.addr}, ${a.city} ${a.post || ""}</small></div><button class="link-arrow" data-deladdr="${i}">Remove</button></div>`).join("") : `<p style="color:var(--muted)">No saved addresses yet.</p>`}</div>
+        <div class="form-grid" style="margin-top:14px">
+          <div class="field"><label>Label</label><input id="adLabel" placeholder="Home / Office"></div>
+          <div class="field"><label>City</label><input id="adCity" value="Karachi"></div>
+        </div>
+        <div class="field"><label>Address</label><input id="adAddr" placeholder="House / street / area"></div>
+        <button class="btn sm" id="adAdd" style="margin-top:12px">Add address</button>
+      </div>
+      <div class="co-step">
+        <h2 style="font-size:20px">Profile &amp; preferences</h2>
         <div class="form-grid">
           <div class="field"><label>Name</label><input value="${user.name}" disabled></div>
           <div class="field"><label>Email</label><input value="${user.email}" disabled></div>
         </div>
-        <a href="wishlist.html" class="link-arrow">Go to wishlist <span>→</span></a>
+        <label class="co-check"><input type="checkbox" id="prefNews" checked> Email me about new arrivals &amp; private sales</label>
+        <label class="co-check"><input type="checkbox" id="prefAlert" checked> Notify me on wishlist price drops</label>
+        <div style="margin-top:16px"><a href="wishlist.html" class="link-arrow">Go to wishlist <span>→</span></a></div>
       </div>`;
     $("#logoutBtn").onclick = () => { user = null; saveUser(); showToast("Signed out"); renderHeader(); renderAccount(); };
+    $$("[data-reorder]").forEach(b => b.onclick = () => reorder(orders.find(o => o.ref === b.dataset.reorder)));
+    $$("[data-print]").forEach(b => b.onclick = () => printInvoice(orders.find(o => o.ref === b.dataset.print)));
+    const setStatus = (ref, status, msg) => {
+      const o = orders.find(x => x.ref === ref); if (!o) return;
+      o.status = status; (o.history = o.history || []).push({ at: new Date().toISOString(), status });
+      saveOrders(); showToast(msg); renderAccount();
+    };
+    $$("[data-cancel]").forEach(b => b.onclick = () => setStatus(b.dataset.cancel, "Cancelled", "Order cancelled"));
+    $$("[data-return]").forEach(b => b.onclick = () => setStatus(b.dataset.return, "Return requested", "Return requested — we'll email a label"));
+    $$("[data-deladdr]").forEach(b => b.onclick = () => { addresses.splice(+b.dataset.deladdr, 1); saveAddr(); renderAccount(); });
+    const adAdd = $("#adAdd"); if (adAdd) adAdd.onclick = () => {
+      const addr = $("#adAddr").value.trim(); if (!addr) { showToast("Enter an address"); return; }
+      addresses.push({ label: $("#adLabel").value.trim() || "Address", addr, city: $("#adCity").value.trim() || "Karachi", post: "", country: "Pakistan" });
+      saveAddr(); showToast("Address saved"); renderAccount();
+    };
+    const pn = $("#prefNews"), pa = $("#prefAlert");
+    if (pn) pn.onchange = () => { S.set("velour_pref_news", pn.checked); showToast(pn.checked ? "Subscribed" : "Unsubscribed"); };
+    if (pa) pa.onchange = () => { S.set("velour_pref_alert", pa.checked); showToast(pa.checked ? "Alerts on" : "Alerts off"); };
   }
 
   /* ---------------------------------------------------------------- auth pages */
@@ -767,6 +1023,7 @@
   /* ---------------------------------------------------------------- init */
   function init() {
     renderHeader(); renderFooter();
+    const curSel = $("#curSel"); if (curSel) curSel.onchange = () => setCurrency(curSel.value);
     const holder = document.createElement("div");
     holder.innerHTML = `
       <div class="overlay" id="overlay"></div>
@@ -847,4 +1104,14 @@
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
+
+  window.VELOUR = window.VELOUR || {};
+  Object.assign(window.VELOUR, {
+    addToCart: (id, qty) => addToCart(id, qty || 1),
+    openDrawer, closeAll, money, byId,
+    toast: showToast, openSearch,
+    toggleWish, quickView, setCurrency,
+    get currency() { return cur; },
+    get cart() { return cart; }
+  });
 })();

@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /account.html
+Disallow: /checkout.html
+Disallow: /order.html
+Disallow: /cart.html
+
+Sitemap: https://fahimsiddiqui462-stack.github.io/velour/sitemap.xml
