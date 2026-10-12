@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sign In — VELOUR</title>
+<meta name="description" content="Sign in to your VELOUR account." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..900&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body data-page="login">
+<div id="site-header"></div>
+
+<main>
+  <section class="sec">
+    <div class="wrap"><div class="auth-wrap">
+      <div class="auth-card">
+        <h1>Welcome back</h1>
+        <p class="sub">Sign in to view your orders, wishlist and saved details.</p>
+        <form id="loginForm">
+          <div class="field"><label for="lgEmail">Email address</label><input id="lgEmail" type="email" required placeholder="you@example.com"></div>
+          <div class="field"><label for="lgPass">Password</label><input id="lgPass" type="password" required placeholder="••••••••"></div>
+          <button class="btn block" type="submit">Sign in</button>
+        </form>
+        <div class="auth-switch">or</div>
+        <button class="btn ghost block" type="button" onclick="alert('Google sign-in is available on the live store.')">Continue with Google</button>
+        <p class="auth-alt">New to VELOUR? <a href="register.html">Create an account</a></p>
+      </div>
+    </div></div>
+  </section>
+
+</main>
+
+<div id="site-footer"></div>
+
+<script src="assets/js/data.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
