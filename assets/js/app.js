@@ -557,7 +557,7 @@
       </div>
       <div class="filter-group"><button class="btn ghost sm block" id="clearFilters">Clear all</button></div>`;
 
-    function apply() {
+    function apply(scroll) {
       let list = V.products.slice();
       if (dept !== "all") list = list.filter(p => p.dept === dept);
       if (state.brand !== "all") list = list.filter(p => p.brand === state.brand);
@@ -575,28 +575,35 @@
       $("#shopGrid").innerHTML = list.length ? list.map(cardHTML).join("")
         : `<div class="empty-page" style="grid-column:1/-1"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><p>No pieces match your filters.</p></div>`;
       observeReveals();
+      if (scroll) scrollToShopTop();
+    }
+    function scrollToShopTop() {
+      const top = $(".shop-top"); if (!top) return;
+      if (window.scrollY <= top.getBoundingClientRect().top + window.scrollY - 84) return;
+      const y = Math.max(0, top.getBoundingClientRect().top + window.scrollY - 84);
+      try { window.scrollTo({ top: y, behavior: "smooth" }); } catch (e) { window.scrollTo(0, y); }
     }
     $("#shopFilters").addEventListener("change", e => {
       if (e.target.name === "dept") dept = e.target.value;
       if (e.target.name === "brand") state.brand = e.target.value;
       if (e.target.name === "cat") state.cat = e.target.value;
       if (e.target.name === "price") state.max = +e.target.value;
-      apply();
+      apply(true);
     });
     $("#shopFilters").addEventListener("click", e => {
       const c = e.target.closest("[data-color]");
-      if (c) { state.color = c.dataset.color; $$("#colorChips .chip").forEach(x => x.classList.toggle("on", x === c)); apply(); return; }
+      if (c) { state.color = c.dataset.color; $$("#colorChips .chip").forEach(x => x.classList.toggle("on", x === c)); apply(true); return; }
       const s = e.target.closest("[data-size]");
-      if (s) { state.size = s.dataset.size; $$("#sizeChips .chip").forEach(x => x.classList.toggle("on", x === s)); apply(); return; }
+      if (s) { state.size = s.dataset.size; $$("#sizeChips .chip").forEach(x => x.classList.toggle("on", x === s)); apply(true); return; }
     });
-    $("#shopSort").addEventListener("change", e => { state.sort = e.target.value; apply(); });
-    const ss = $("#shopSearch"); if (ss) ss.addEventListener("input", e => { q = e.target.value.trim(); apply(); });
+    $("#shopSort").addEventListener("change", e => { state.sort = e.target.value; apply(true); });
+    const ss = $("#shopSearch"); if (ss) ss.addEventListener("input", e => { q = e.target.value.trim(); apply(false); });
     $("#clearFilters").addEventListener("click", () => {
       dept = "all"; state.brand = "all"; state.cat = "all"; state.color = "all"; state.size = "all"; state.max = 999999;
       $$("#shopFilters input").forEach(i => { if (i.type === "radio") i.checked = i.value === "all" || i.value === "999999"; });
       $$("#colorChips .chip").forEach(x => x.classList.toggle("on", x.dataset.color === "all"));
       $$("#sizeChips .chip").forEach(x => x.classList.toggle("on", x.dataset.size === "all"));
-      apply();
+      apply(true);
     });
     apply();
   }

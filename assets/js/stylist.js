@@ -65,9 +65,9 @@
     else if (/\b(perfume|fragrance|scent|attar|oud)\b/.test(t)) out.occasion = "fragrance";
     else if (/\b(gift|present|birthday present)\b/.test(t)) out.occasion = "gift";
 
-    if (/\b(women|woman|womens|ladies|lady|female|her|hers|wife|mom|mum|mother|sister|aunt)\b/.test(t)) { out.dept = "women"; out.gender = "women"; }
-    else if (/\b(men|man|mens|gents|male|him|his|husband|dad|father|brother|uncle)\b/.test(t)) { out.dept = "men"; out.gender = "men"; }
-    else if (/\b(kids|kid|child|children|boy|girl|baby|toddler)\b/.test(t)) { out.dept = "kids"; }
+    if (/\b(women|woman|womens|women's|ladies|lady|female|her|hers|wife|mom|mum|mother|sister|aunt|girlfriend|fianc[eé]e)\b/.test(t)) { out.dept = "women"; out.gender = "women"; }
+    else if (/\b(men|man|mens|men's|gents|male|him|his|husband|dad|father|brother|uncle|boyfriend|fianc[eé])\b/.test(t)) { out.dept = "men"; out.gender = "men"; }
+    else if (/\b(kids|kid|child|children|boy|girl|baby|toddler|son|daughter|nephew|niece)\b/.test(t)) { out.dept = "kids"; }
     else if (/\b(home|decor)\b/.test(t)) out.dept = "home";
 
     const bud = t.match(/(?:under|below|less than|up to|upto|max|budget of|around|about|within|rs\.?|pkr)?\s*rs?\s*([\d,]+)\s*(k|thousand)?/);
@@ -109,16 +109,22 @@
     sc += ((p.id * 37) % 7) / 10; // deterministic variety
     return { sc, why };
   }
+  const GENDER_DEPTS = ["women", "men", "kids"];
   function recommend(s, plan, offset) {
-    const list = products().map(p => ({ p, ...scoreProduct(p, s, plan) })).sort((a, b) => b.sc - a.sc);
-    const seen = new Set(), picked = [];
-    for (const r of list) {
-      if (picked.length >= 4) break;
-      if (seen.has(r.p.cat) && picked.length < 3) continue;
-      seen.add(r.p.cat); picked.push(r);
+    const dept = s.dept || state.dept;
+    const scored = products().map(p => ({ p, ...scoreProduct(p, s, plan) })).sort((a, b) => b.sc - a.sc);
+    // hard-respect the shopper's gender/department when we know it
+    let ranked = scored;
+    if (dept && GENDER_DEPTS.includes(dept)) {
+      const same = scored.filter(r => r.p.dept === dept);
+      ranked = same.length >= 4 ? same : same.concat(scored.filter(r => r.p.dept !== dept));
     }
+    // diversify by category, then fill
+    const out = [], seen = new Set();
+    for (const r of ranked) { if (out.length >= 8) break; if (seen.has(r.p.cat)) continue; seen.add(r.p.cat); out.push(r); }
+    for (const r of ranked) { if (out.length >= 8) break; if (!out.includes(r)) out.push(r); }
     const start = (offset || 0) * 4;
-    return list.slice(start, start + 4).map(r => ({ ...r.p, _why: (r.why[0] || "a considered choice") }));
+    return out.slice(start, start + 4).map(r => ({ ...r.p, _why: (r.why[0] || "a considered choice") }));
   }
 
   /* ----------------------------------------------------------- NLG */
@@ -132,37 +138,56 @@
   }
   function localIntro(s, plan, count, offset) {
     const occ = plan ? plan.label : (s.dept || "you");
-    if (offset) return "Here are a few more options — ";
+    if (offset) {
+      const more = ["A few more to consider — ", "Here are some other directions — ", "More pieces along these lines — "];
+      return more[(offset + (s.dept ? s.dept.length : 0)) % more.length];
+    }
+    const who = (state.gender || s.gender) ? " for " + (state.gender || s.gender) : "";
     const bits = [];
-    bits.push("For " + occ);
+    bits.push("For " + occ + who);
     if (s.budget) bits.push("around " + money(s.budget));
     if (s.color) bits.push("in " + s.color.toLowerCase());
     else if (s.tone) bits.push("with a " + s.tone + " palette");
-    return bits.join(", ") + " — here" + (count === 1 ? "'s a piece" : " are a few pieces") + " I'd reach for:";
+    const tails = [" — here" + (count === 1 ? "'s a piece" : " are a few pieces") + " I'd reach for:",
+      " — these felt like the strongest matches:",
+      ". I'd start with these:",
+      " — a few I think you'll love:"];
+    const seed = (state.gender || state.dept || "x").length + (s.budget || 0) % 4 + (state.occasion || "z").length;
+    return bits.join(", ") + tails[seed % tails.length];
   }
-  async function llmIntro(userText, s, plan, recs) {
-    if (!LM_ENABLED) return null;
-    const facts = recs.map(p => `${p.name} (${p.brand}, ${p.cat}, ${money(p.price)})`).join("; ");
-    const sys = "You are VELOUR's personal stylist, warm and concise, British English, no emojis, no bullet lists. " +
-      "Reply with ONE short sentence (max 30 words) introducing the recommendations. " +
-      "Only reference these real products: " + facts + ". Never invent products or prices.";
-    const ctx = `Occasion: ${plan ? plan.label : "unspecified"}. Budget: ${s.budget ? money(s.budget) : "open"}. ` +
-      `Colour: ${s.color || s.tone || "open"}. Customer said: "${userText.slice(0, 160)}"`;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 9000);
-    try {
-      const res = await fetch(LM_ENDPOINT, {
-        method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "openai", temperature: 0.6, max_tokens: 80, messages: [{ role: "system", content: sys }, { role: "user", content: ctx }] })
-      });
-      clearTimeout(timer);
-      if (!res.ok) return null;
-      const data = await res.json();
-      let txt = ((data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "").trim();
-      txt = txt.replace(/^["']|["']$/g, "").replace(/\s+/g, " ");
-      if (txt.length < 8 || txt.length > 240) return null;
-      return txt;
-    } catch (e) { clearTimeout(timer); return null; }
+  async function llmReply(userText, s, plan, recs) {
+    if (!LM_ENABLED || !recs || !recs.length) return null;
+    const facts = recs.map(p => `${p.name} — ${p.brand}, ${p.cat}, ${money(p.price)}`).join("; ");
+    const gender = state.gender || s.gender || "";
+    const sys =
+      "You are VELOUR's personal stylist: warm, human, confident, direct. British English. No emojis, no markdown, no bullet lists or headings. " +
+      "Write a short natural reply of 2 to 3 sentences. First acknowledge the shopper's request in your own words. Then explain, specifically and freshly, " +
+      "why the recommended pieces suit them (fabric, cut, colour, occasion or budget). Vary your wording every time and never repeat canned phrases. " +
+      (gender ? `The shopper is looking for ${gender}'s pieces, so only discuss ${gender}'s items. ` : "") +
+      "Only mention the real products listed below, with their real prices, and never invent any product, brand or price. " +
+      "Recommended products: " + facts + ".";
+    const ctx = `Occasion: ${plan ? plan.label : "unspecified"}. Department: ${state.dept || "any"}. ` +
+      `Budget: ${s.budget ? money(s.budget) : "open"}. Colour preference: ${s.color || s.tone || "open"}. ` +
+      `The shopper said: "${userText.slice(0, 200)}"`;
+    const body = JSON.stringify({
+      model: "openai", temperature: 0.9, max_tokens: 220,
+      messages: [{ role: "system", content: sys }, { role: "user", content: ctx }]
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      try {
+        const res = await fetch(LM_ENDPOINT, { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json" }, body });
+        clearTimeout(timer);
+        if (!res.ok) { if (attempt === 0 && res.status >= 500) continue; return null; }
+        const data = await res.json();
+        let txt = ((data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "").trim();
+        txt = txt.replace(/^["']+|["']+$/g, "").replace(/[ \t]+/g, " ").replace(/\n{2,}/g, " ").replace(/\n/g, " ");
+        if (txt.length < 12 || txt.length > 600) return null;
+        return txt;
+      } catch (e) { clearTimeout(timer); if (attempt === 0 && !ctrl.signal.aborted) continue; return null; }
+    }
+    return null;
   }
 
   /* ----------------------------------------------------------- state + turn */
@@ -273,7 +298,7 @@
     if (!listEl) return;
     listEl.innerHTML = log.map((m, i) => {
       if (m.role === "user") return `<div class="sty-msg me">${esc(m.text)}</div>`;
-      let html = `<div class="sty-msg bot">${esc(m.intro || m.text || "")}`;
+      let html = `<div class="sty-msg bot">` + (m.thinking ? `<span class="sty-typing"><i></i><i></i><i></i></span>` : esc(m.intro || m.text || "")) + "";
       if (m.recs && m.recs.length) {
         html += `<div class="sty-cards">${m.recs.map(p => `
           <div class="sty-card" data-id="${p.id}">
@@ -302,13 +327,21 @@
     let reply;
     try { reply = turn(text); } catch (e) { reply = { text: "Apologies — something glitched there. Could you rephrase?", chips: ["A wedding", "Everyday", "Under Rs 5,000"] }; }
     const idx = log.length;
-    log.push({ role: "assistant", ...reply });
+    const entry = { role: "assistant", ...reply };
+    const online = (typeof navigator === "undefined") || navigator.onLine !== false;
+    const useLM = !!(reply._canLM && LM_ENABLED && online);
+    if (useLM) { entry.thinking = true; entry._local = entry.intro || entry.text; entry.intro = ""; entry.text = ""; }
+    log.push(entry);
     render();
-    if (reply._canLM && LM_ENABLED) {
-      try {
-        const intro = await llmIntro(reply._ctx.text, reply._ctx.s, reply._ctx.plan, reply._ctx.recs);
-        if (intro) { const m = log[idx]; m.intro = intro; m.text = intro; render(); }
-      } catch (e) {}
+    if (useLM) {
+      let llm = null;
+      try { llm = await llmReply(reply._ctx.text, reply._ctx.s, reply._ctx.plan, reply._ctx.recs); } catch (e) { llm = null; }
+      const m = log[idx];
+      m.thinking = false;
+      m.intro = llm || m._local || localIntro(state, reply._ctx.plan, reply._ctx.recs ? reply._ctx.recs.length : 0, state.offset);
+      m.text = m.intro;
+      delete m._local;
+      render();
     }
   }
 
